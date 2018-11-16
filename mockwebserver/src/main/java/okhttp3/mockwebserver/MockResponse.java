@@ -93,6 +93,14 @@ public final class MockResponse implements Cloneable {
     return this;
   }
 
+  public int getResponseCode() {
+    return Integer.parseInt(status.split(" ")[1]);
+  }
+
+  public String getResponseMessage() {
+    return status.split(" ", 3)[2];
+  }
+
   /** Returns the HTTP headers, such as "Content-Length: 0". */
   public Headers getHeaders() {
     return headers.build();
@@ -240,6 +248,11 @@ public final class MockResponse implements Cloneable {
 
   public long getThrottlePeriod(TimeUnit unit) {
     return unit.convert(throttlePeriodAmount, throttlePeriodUnit);
+  }
+
+  boolean isInterimResponse() {
+    int responseCode = getResponseCode();
+    return responseCode >= 100 && responseCode < 200;
   }
 
   /**

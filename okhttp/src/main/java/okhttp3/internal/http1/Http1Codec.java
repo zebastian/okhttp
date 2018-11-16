@@ -45,6 +45,7 @@ import okio.Timeout;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static okhttp3.internal.Util.checkOffsetAndCount;
 import static okhttp3.internal.http.StatusLine.HTTP_CONTINUE;
+import static okhttp3.internal.http.StatusLine.HTTP_PROCESSING;
 
 /**
  * A socket connection that can be used to send HTTP/1.1 messages. This class strictly enforces the
@@ -196,7 +197,7 @@ public final class Http1Codec implements HttpCodec {
 
       if (expectContinue && statusLine.code == HTTP_CONTINUE) {
         return null;
-      } else if (statusLine.code == HTTP_CONTINUE) {
+      } else if (statusLine.code == HTTP_CONTINUE || statusLine.code == HTTP_PROCESSING) {
         state = STATE_READ_RESPONSE_HEADERS;
         return responseBuilder;
       }

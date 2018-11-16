@@ -111,10 +111,10 @@ public final class UrlConnectionCacheTest {
     // Test each documented HTTP/1.1 code, plus the first unused value in each range.
     // http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
 
-    // We can't test 100 because it's not really a response.
+    // We can't test 100 or 102 because they are interim response codes.
     // assertCached(false, 100);
     assertCached(false, 101);
-    assertCached(false, 102);
+    // assertCached(false, 102);
     assertCached(true, 200);
     assertCached(false, 201);
     assertCached(false, 202);

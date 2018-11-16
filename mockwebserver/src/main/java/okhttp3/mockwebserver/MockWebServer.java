@@ -555,46 +555,50 @@ public final class MockWebServer extends ExternalResource implements Closeable {
         requestCount.incrementAndGet();
         requestQueue.add(request);
 
-        MockResponse response = dispatcher.dispatch(request);
-        if (response.getSocketPolicy() == DISCONNECT_AFTER_REQUEST) {
-          socket.close();
-          return false;
-        }
-        if (response.getSocketPolicy() == NO_RESPONSE) {
-          // This read should block until the socket is closed. (Because nobody is writing.)
-          if (source.exhausted()) return false;
-          throw new ProtocolException("unexpected data");
-        }
-
         boolean reuseSocket = true;
-        boolean requestWantsWebSockets = "Upgrade".equalsIgnoreCase(request.getHeader("Connection"))
-            && "websocket".equalsIgnoreCase(request.getHeader("Upgrade"));
-        boolean responseWantsWebSockets = response.getWebSocketListener() != null;
-        if (requestWantsWebSockets && responseWantsWebSockets) {
-          handleWebSocketUpgrade(socket, source, sink, request, response);
-          reuseSocket = false;
-        } else {
-          writeHttpResponse(socket, sink, response);
-        }
+        MockResponse response;
+        do {
+          response = dispatcher.dispatch(request);
+          if (response.getSocketPolicy() == DISCONNECT_AFTER_REQUEST) {
+            socket.close();
+            return false;
+          }
+          if (response.getSocketPolicy() == NO_RESPONSE) {
+            // This read should block until the socket is closed. (Because nobody is writing.)
+            if (source.exhausted()) return false;
+            throw new ProtocolException("unexpected data");
+          }
 
-        if (logger.isLoggable(Level.INFO)) {
-          logger.info(MockWebServer.this + " received request: " + request
-              + " and responded: " + response);
-        }
+          boolean requestWantsWebSockets
+              = "Upgrade".equalsIgnoreCase(request.getHeader("Connection"))
+              && "websocket".equalsIgnoreCase(request.getHeader("Upgrade"));
+          boolean responseWantsWebSockets = response.getWebSocketListener() != null;
+          if (requestWantsWebSockets && responseWantsWebSockets) {
+            handleWebSocketUpgrade(socket, source, sink, request, response);
+            reuseSocket = false;
+          } else {
+            writeHttpResponse(socket, sink, response);
+          }
 
-        // See warnings associated with these socket policies in SocketPolicy.
-        if (response.getSocketPolicy() == DISCONNECT_AT_END) {
-          socket.close();
-          return false;
-        } else if (response.getSocketPolicy() == SHUTDOWN_INPUT_AT_END) {
-          socket.shutdownInput();
-        } else if (response.getSocketPolicy() == SHUTDOWN_OUTPUT_AT_END) {
-          socket.shutdownOutput();
-        } else if (response.getSocketPolicy() == SHUTDOWN_SERVER_AFTER_RESPONSE) {
-          shutdown();
-        }
+          if (logger.isLoggable(Level.INFO)) {
+            logger.info(MockWebServer.this + " received request: " + request
+                + " and responded: " + response);
+          }
 
-        sequenceNumber++;
+          // See warnings associated with these socket policies in SocketPolicy.
+          if (response.getSocketPolicy() == DISCONNECT_AT_END) {
+            socket.close();
+            return false;
+          } else if (response.getSocketPolicy() == SHUTDOWN_INPUT_AT_END) {
+            socket.shutdownInput();
+          } else if (response.getSocketPolicy() == SHUTDOWN_OUTPUT_AT_END) {
+            socket.shutdownOutput();
+          } else if (response.getSocketPolicy() == SHUTDOWN_SERVER_AFTER_RESPONSE) {
+            shutdown();
+          }
+
+          sequenceNumber++;
+        } while (response.isInterimResponse());
         return reuseSocket;
       }
     });
@@ -710,8 +714,8 @@ public final class MockWebServer extends ExternalResource implements Closeable {
         .headers(request.getHeaders())
         .build();
     final Response fancyResponse = new Response.Builder()
-        .code(Integer.parseInt(response.getStatus().split(" ")[1]))
-        .message(response.getStatus().split(" ", 3)[2])
+        .code(response.getResponseCode())
+        .message(response.getResponseMessage())
         .headers(response.getHeaders())
         .request(fancyRequest)
         .protocol(Protocol.HTTP_1_1)
@@ -915,25 +919,27 @@ public final class MockWebServer extends ExternalResource implements Closeable {
       requestQueue.add(request);
 
       MockResponse response;
-      try {
-        response = dispatcher.dispatch(request);
-      } catch (InterruptedException e) {
-        throw new AssertionError(e);
-      }
-      if (response.getSocketPolicy() == DISCONNECT_AFTER_REQUEST) {
-        socket.close();
-        return;
-      }
-      writeResponse(stream, response);
-      if (logger.isLoggable(Level.INFO)) {
-        logger.info(MockWebServer.this + " received request: " + request
-            + " and responded: " + response + " protocol is " + protocol.toString());
-      }
+      do {
+        try {
+          response = dispatcher.dispatch(request);
+        } catch (InterruptedException e) {
+          throw new AssertionError(e);
+        }
+        if (response.getSocketPolicy() == DISCONNECT_AFTER_REQUEST) {
+          socket.close();
+          return;
+        }
+        writeResponse(stream, response);
+        if (logger.isLoggable(Level.INFO)) {
+          logger.info(MockWebServer.this + " received request: " + request
+              + " and responded: " + response + " protocol is " + protocol.toString());
+        }
 
-      if (response.getSocketPolicy() == DISCONNECT_AT_END) {
-        Http2Connection connection = stream.getConnection();
-        connection.shutdown(ErrorCode.NO_ERROR);
-      }
+        if (response.getSocketPolicy() == DISCONNECT_AT_END) {
+          Http2Connection connection = stream.getConnection();
+          connection.shutdown(ErrorCode.NO_ERROR);
+        }
+      } while (response.isInterimResponse());
     }
 
     private RecordedRequest readRequest(Http2Stream stream) throws IOException {
@@ -993,13 +999,10 @@ public final class MockWebServer extends ExternalResource implements Closeable {
       if (response.getSocketPolicy() == NO_RESPONSE) {
         return;
       }
+
       List<Header> http2Headers = new ArrayList<>();
-      String[] statusParts = response.getStatus().split(" ", 3);
-      if (statusParts.length < 2) {
-        throw new AssertionError("Unexpected status: " + response.getStatus());
-      }
-      // TODO: constants for well-known header names.
-      http2Headers.add(new Header(Header.RESPONSE_STATUS, statusParts[1]));
+      int responseCode = response.getResponseCode();
+      http2Headers.add(new Header(Header.RESPONSE_STATUS, Integer.toString(responseCode)));
       Headers headers = response.getHeaders();
       for (int i = 0, size = headers.size(); i < size; i++) {
         http2Headers.add(new Header(headers.name(i), headers.value(i)));
@@ -1009,7 +1012,8 @@ public final class MockWebServer extends ExternalResource implements Closeable {
 
       Buffer body = response.getBody();
       boolean closeStreamAfterHeaders = body != null || !response.getPushPromises().isEmpty();
-      stream.writeHeaders(http2Headers, closeStreamAfterHeaders);
+      boolean responseBody = response.isInterimResponse() || closeStreamAfterHeaders;
+      stream.writeHeaders(http2Headers, responseBody);
       pushPromises(stream, response.getPushPromises());
       if (body != null) {
         BufferedSink sink = Okio.buffer(stream.getSink());

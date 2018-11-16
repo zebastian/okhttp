@@ -62,6 +62,7 @@ import okhttp3.internal.RecordingOkAuthenticator;
 import okhttp3.internal.Util;
 import okhttp3.internal.Version;
 import okhttp3.internal.http.RecordingProxySelector;
+import okhttp3.internal.http.StatusLine;
 import okhttp3.internal.io.InMemoryFileSystem;
 import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
@@ -97,7 +98,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 public final class CallTest {
-  @Rule public final TestRule timeout = new Timeout(30_000, TimeUnit.MILLISECONDS);
+  @Rule public final TestRule timeout = new Timeout(3000_000, TimeUnit.MILLISECONDS);
   @Rule public final MockWebServer server = new MockWebServer();
   @Rule public final MockWebServer server2 = new MockWebServer();
   @Rule public final InMemoryFileSystem fileSystem = new InMemoryFileSystem();
@@ -2544,6 +2545,51 @@ public final class CallTest {
 
     assertEquals(0, server.takeRequest().getSequenceNumber());
     assertEquals(1, server.takeRequest().getSequenceNumber());
+  }
+
+  @Test public void httpProcessingResponse() throws Exception {
+    server.enqueue(new MockResponse()
+        .setResponseCode(StatusLine.HTTP_PROCESSING)
+        .clearHeaders());
+    server.enqueue(new MockResponse()
+        .setBody("abc"));
+
+    RecordedResponse response = executeSynchronously(new Request.Builder()
+        .url(server.url("/"))
+        .post(RequestBody.create(MediaType.get("text/plain"), "def"))
+        .build());
+    response.assertBody("abc");
+
+    assertEquals("def", server.takeRequest().getBody().readUtf8());
+  }
+
+  @Test public void httpProcessingResponseHttp2() throws Exception {
+    enableProtocol(Protocol.HTTP_2);
+    httpProcessingResponse();
+  }
+
+  @Test public void multipleInterimResponses() throws Exception {
+    server.enqueue(new MockResponse()
+        .setResponseCode(StatusLine.HTTP_CONTINUE)
+        .clearHeaders());
+    server.enqueue(new MockResponse()
+        .setResponseCode(StatusLine.HTTP_PROCESSING)
+        .clearHeaders());
+    server.enqueue(new MockResponse()
+        .setBody("abc"));
+
+    RecordedResponse response = executeSynchronously(new Request.Builder()
+        .url(server.url("/"))
+        .post(RequestBody.create(MediaType.get("text/plain"), "def"))
+        .build());
+    response.assertBody("abc");
+
+    assertEquals("def", server.takeRequest().getBody().readUtf8());
+  }
+
+  @Test public void multipleInterimResponsesHttp2() throws Exception {
+    enableProtocol(Protocol.HTTP_2);
+    multipleInterimResponses();
   }
 
   @Test public void successfulExpectContinuePermitsConnectionReuseWithHttp2() throws Exception {

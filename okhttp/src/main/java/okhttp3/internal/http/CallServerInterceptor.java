@@ -29,6 +29,9 @@ import okio.ForwardingSink;
 import okio.Okio;
 import okio.Sink;
 
+import static okhttp3.internal.http.StatusLine.HTTP_CONTINUE;
+import static okhttp3.internal.http.StatusLine.HTTP_PROCESSING;
+
 /** This is the last interceptor in the chain. It makes a network call to the server. */
 public final class CallServerInterceptor implements Interceptor {
   private final boolean forWebSocket;
@@ -96,17 +99,16 @@ public final class CallServerInterceptor implements Interceptor {
         .build();
 
     int code = response.code();
-    if (code == 100) {
-      // server sent a 100-continue even though we did not request one.
-      // try again to read the actual response
+    // Handle zero or more interim 1xx responses.
+    while (code == HTTP_CONTINUE || code == HTTP_PROCESSING) {
       responseBuilder = httpCodec.readResponseHeaders(false);
 
       response = responseBuilder
-              .request(request)
-              .handshake(streamAllocation.connection().handshake())
-              .sentRequestAtMillis(sentRequestMillis)
-              .receivedResponseAtMillis(System.currentTimeMillis())
-              .build();
+          .request(request)
+          .handshake(streamAllocation.connection().handshake())
+          .sentRequestAtMillis(sentRequestMillis)
+          .receivedResponseAtMillis(System.currentTimeMillis())
+          .build();
 
       code = response.code();
     }
